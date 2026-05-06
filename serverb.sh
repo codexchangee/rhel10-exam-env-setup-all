@@ -16,12 +16,12 @@ if ! rpm -qa | grep -q "gnome-session"; then
     dnf group install "Server with GUI" -y --nobest
 fi
 
-echo -e "o\nn\np\n1\n\n+200M\nw" | fdisk /dev/vdb
+echo -e "o\nn\np\n1\n\n+200M\nw" | fdisk /dev/sdb
 
 partprobe
 
-pvcreate /dev/vdb1
-vgcreate myvg /dev/vdb1
+pvcreate /dev/sdb1
+vgcreate myvg /dev/sdb1
 lvcreate -L 100M -n home myvg
 
 mkfs.ext4 /dev/myvg/home
