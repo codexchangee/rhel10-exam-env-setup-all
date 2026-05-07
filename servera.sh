@@ -60,6 +60,34 @@ for username in remoteuser2 andrew simone; do
 done
 echo "Users created."
 
+yum install -y git
+
+REPO_URL="https://github.com/codexchangee/rhel-manpages.git"
+TMP_DIR="/tmp/rhel-manpages"
+
+echo "Checking if manpage repo is public..."
+if git ls-remote "$REPO_URL" &>/dev/null; then
+    echo "Repo is public. Installing man pages..."
+    rm -rf "$TMP_DIR"
+    git clone --depth 1 "$REPO_URL" "$TMP_DIR"
+    if [ -d "$TMP_DIR/man1" ]; then
+        cp -f "$TMP_DIR"/man1/*.1 /usr/share/man/man1/
+        mandb || true
+    else
+        echo "man1 directory not found in repo, skipping man page install."
+    fi
+    # Create /usr/sbin/ex200 script (as requested)
+    cat >/usr/sbin/ex200 <<'EOF'
+#!/bin/bash
+if [ -f ~/.ex200/ex200.conf ]; then
+        cat ~/.ex200/ex200.conf
+else
+        echo "There Is No Message For You Dude"
+fi
+EOF
+    chmod +x /usr/sbin/ex200
+
+
 echo "Checking if GUI is installed..."
 if ! rpm -qa | grep -q "gnome-session"; then
     echo "GUI not found. Installing Server with GUI..."
