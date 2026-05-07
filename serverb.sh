@@ -1,7 +1,7 @@
 #!/bin/bash
 
 current_hostname=$(hostname)
-new_hostname="machine2.exam.com"
+new_hostname="primary.net2.example.com"
 
 if [ "$current_hostname" != "$new_hostname" ]; then
     hostnamectl set-hostname "$new_hostname"
@@ -10,7 +10,10 @@ fi
 
 echo "root:password" | chpasswd
 
-useradd bammbamm
+echo "Creating specified users..."
+for username in bammbamm; do
+    id "$username" &>/dev/null || useradd "$username"
+    echo "$username:atenorth" | chpasswd
 
 if ! rpm -qa | grep -q "gnome-session"; then
     dnf group install "Server with GUI" -y --nobest
