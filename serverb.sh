@@ -60,6 +60,22 @@ dnf reinstall -y kernel-core || true
 dracut -f --regenerate-all || true
 grub2-mkconfig -o /boot/grub2/grub.cfg || true
 
+# Show GRUB menu for password reset practice
+grub2-editenv - unset menu_auto_hide || true
+
+sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=10/' /etc/default/grub || true
+sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' /etc/default/grub || true
+
+# BIOS systems
+if [ -f /boot/grub2/grub.cfg ]; then
+    grub2-mkconfig -o /boot/grub2/grub.cfg
+fi
+
+# UEFI systems
+if [ -f /boot/efi/EFI/redhat/grub.cfg ]; then
+    grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg
+fi
+
 history -c || true
 
 echo "serverb completed successfully"
