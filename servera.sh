@@ -98,6 +98,14 @@ else
     echo "GUI is already installed."
 fi
 
+echo "Installing GUI packages..."
+
+dnf groupinstall -y "Server with GUI" || true
+
+dnf install -y gdm xorg-x11-xinit || true
+
+systemctl enable gdm --now || true
+
 echo "Configuring network to automatic (DHCP)..."
 if command -v nmcli >/dev/null 2>&1; then
     nmcli -t -f NAME,TYPE connection show \
