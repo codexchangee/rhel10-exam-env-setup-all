@@ -87,6 +87,8 @@ fi
 EOF
     chmod +x /usr/sbin/ex200
 
+fi
+
 
 echo "Checking if GUI is installed..."
 if ! rpm -qa | grep -q "gnome-session"; then
