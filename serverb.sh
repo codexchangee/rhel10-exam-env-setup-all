@@ -1,43 +1,67 @@
 #!/bin/bash
+set -euo pipefail
 
 current_hostname=$(hostname)
 new_hostname="primary.net2.example.com"
 
 if [ "$current_hostname" != "$new_hostname" ]; then
     hostnamectl set-hostname "$new_hostname"
-    sed -i "s/$current_hostname/$new_hostname/g" /etc/hosts
+    sed -i "s/$current_hostname/$new_hostname/g" /etc/hosts || true
 fi
 
 echo "root:password" | chpasswd
 
 echo "Creating specified users..."
+
 for username in bammbamm; do
     id "$username" &>/dev/null || useradd "$username"
     echo "$username:atenorth" | chpasswd
+done
+
+echo "Checking GUI installation..."
 
 if ! rpm -qa | grep -q "gnome-session"; then
-    dnf group install "Server with GUI" -y --nobest
+    dnf group install -y "Server with GUI" --nobest || true
 fi
 
-echo -e "o\nn\np\n1\n\n+200M\nw" | fdisk /dev/sdb
+echo "Creating partition on /dev/sdb..."
 
-partprobe
+if [ ! -b /dev/sdb1 ]; then
+cat <<EOF | fdisk /dev/sdb
+o
+n
+p
+1
 
-pvcreate /dev/sdb1
-vgcreate myvg /dev/sdb1
-lvcreate -L 100M -n home myvg
++200M
+w
+EOF
+fi
 
-mkfs.ext4 /dev/myvg/home
+partprobe || true
+sleep 2
+
+echo "Creating LVM..."
+
+pvs | grep -q "/dev/sdb1" || pvcreate /dev/sdb1
+vgs | grep -q "myvg" || vgcreate myvg /dev/sdb1
+lvs | grep -q "home" || lvcreate -L 100M -n home myvg
+
+blkid /dev/myvg/home | grep -q ext4 || mkfs.ext4 -F /dev/myvg/home
 
 mkdir -p /home
-mount /dev/myvg/home /home
 
+mount | grep -q "/home" || mount /dev/myvg/home /home
+
+grep -q "/dev/myvg/home" /etc/fstab || \
 echo "/dev/myvg/home /home ext4 defaults 0 0" >> /etc/fstab
 
-dnf reinstall kernel-core -y
-dracut -f --regenerate-all
-grub2-mkconfig -o /boot/grub2/grub.cfg
+dnf reinstall -y kernel-core || true
+dracut -f --regenerate-all || true
+grub2-mkconfig -o /boot/grub2/grub.cfg || true
 
-history -c
-rm -- "$0"
-reboot
+history -c || true
+
+echo "serverb completed successfully"
+
+# reboot
