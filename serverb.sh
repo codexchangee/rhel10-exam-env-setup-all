@@ -14,7 +14,7 @@ echo "root:password" | chpasswd
 echo "Creating specified users..."
 
 for username in bammbamm; do
-    useradd "$username"
+    useradd -m "$username"
     echo "$username:atenorth" | chpasswd
 done
 
