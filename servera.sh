@@ -1,7 +1,7 @@
 #!/bin/bash
 
 current_hostname=$(hostname)
-new_hostname="machine1.exam.com"
+new_hostname="servera"
 
 if [ "$current_hostname" != "$new_hostname" ]; then
     echo "Changing hostname from $current_hostname to $new_hostname"
