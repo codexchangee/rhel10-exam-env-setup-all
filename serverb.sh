@@ -2,7 +2,7 @@
 set -euo pipefail
 
 current_hostname=$(hostname)
-new_hostname="primary.net2.example.com"
+new_hostname="serverb"
 
 if [ "$current_hostname" != "$new_hostname" ]; then
     hostnamectl set-hostname "$new_hostname"
@@ -13,10 +13,10 @@ echo "root:password" | chpasswd
 
 echo "Creating specified users..."
 
-for username in bammbamm; do
-    useradd -m "$username"
-    echo "$username:atenorth" | chpasswd
-done
+
+    useradd bammbamm
+    echo "bammbamm:atenorth" | chpasswd
+
 
 echo "Checking GUI installation..."
 
