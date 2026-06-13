@@ -63,8 +63,7 @@ exit 1
 ensure_sshpass() {
 if ! command -v sshpass >/dev/null 2>&1
 then
-dnf install -y sshpass >/dev/null 2>&1 
-|| yum install -y sshpass >/dev/null 2>&1
+dnf install -y sshpass >/dev/null 2>&1 || yum install -y sshpass >/dev/null 2>&1
 fi
 }
 
