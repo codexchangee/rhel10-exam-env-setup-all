@@ -1,1329 +1,298 @@
 #!/usr/bin/env bash
-
-############################################################
-
-# RHCSA RHEL10 EXAM CHECKER
-
-# PART 1
-
-# Workstation -> Node1 / Node2
-
-############################################################
-
-set -u
-set -o pipefail
+# RHEL 10 RHCSA exam checker for the supplied question2-question21 HTML files.
+# Read-only checker: it does not modify or clean either exam machine.
+set -uo pipefail
 IFS=$'\n\t'
 
-############################################################
-
-# CONFIGURATION
-
-############################################################
-
-NODE1="primary.net1.example.com"
-NODE2="secondary.net1.example.com"
-
-ROOT_PASS="Ventyol"
-
+NODE1="${NODE1:-172.25.250.10}"
+NODE2="${NODE2:-172.25.250.11}"
+NODE1_ROOT_PASS="${NODE1_ROOT_PASS:-radiowits}"
+NODE2_ROOT_PASS="${NODE2_ROOT_PASS:-atenorth}"
+SSH_USER="${SSH_USER:-root}"
+PASS_MARKS="${PASS_MARKS:-210}"
 TOTAL_MARKS=300
-PASS_MARKS=210
-SCORE=0
 
-NODE1_SCORE=0
-NODE2_SCORE=0
-
-declare -a SUMMARY
-
-############################################################
-
-# COLORS
-
-############################################################
-
-green="\e[32m"
-red="\e[31m"
-yellow="\e[33m"
-blue="\e[34m"
-bold="\e[1m"
-reset="\e[0m"
-
-############################################################
-
-# HELPERS
-
-############################################################
+GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; BLUE=$'\033[34m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+TOTAL_EARNED=0
+SUMMARY=()
 
 need_root() {
-[[ $EUID -eq 0 ]] || {
-echo "Run as root"
-exit 1
-}
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    echo "ERROR: Run with sudo/root. Example: sudo paper-check"
+    exit 1
+  fi
 }
 
 ensure_sshpass() {
-if ! command -v sshpass >/dev/null 2>&1
-then
-dnf install -y sshpass >/dev/null 2>&1 || yum install -y sshpass >/dev/null 2>&1
-fi
+  if ! command -v sshpass >/dev/null 2>&1; then
+    echo "sshpass is required for the existing password-based SSH workflow. Installing..."
+    if command -v dnf >/dev/null 2>&1; then
+      dnf install -y sshpass || { echo "ERROR: Could not install sshpass. Install it and rerun."; exit 1; }
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y sshpass || { echo "ERROR: Could not install sshpass. Install it and rerun."; exit 1; }
+    else
+      echo "ERROR: dnf/yum not found; install sshpass manually."; exit 1
+    fi
+  fi
 }
 
-run_remote() {
-local host="$1"
-shift
+# Each check feeds a read-only shell snippet to the remote host. It is isolated,
+# so one failed question does not stop later questions.
+run_remote_check() {
+  local q="$1" weight="$2" description="$3" host="$4" password="$5" snippet="$6"
+  local output rc=0
+  output=$(printf '%s\n' "$snippet" | SSHPASS="$password" sshpass -e ssh \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=6 \
+    -o ServerAliveInterval=5 \
+    -o ServerAliveCountMax=1 \
+    "${SSH_USER}@${host}" 'bash -s' 2>&1) || rc=$?
 
-```
-sshpass -p "$ROOT_PASS" \
-  ssh \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null \
-  root@"$host" "$@"
-```
-
+  if (( rc == 0 )); then
+    printf '  %sPASS%s %-4s %2d marks - %s\n' "$GREEN" "$RESET" "$q" "$weight" "$description"
+    TOTAL_EARNED=$((TOTAL_EARNED + weight))
+    SUMMARY+=("$q|$description|PASS|$weight")
+  else
+    printf '  %sFAIL%s %-4s %2d marks - %s\n' "$RED" "$RESET" "$q" "$weight" "$description"
+    if [[ -n "$output" ]]; then
+      # Keep the report concise; useful remote diagnostics are shown on failure.
+      printf '       %s\n' "$(printf '%s\n' "$output" | tail -n 2 | tr '\n' ' ')"
+    fi
+    SUMMARY+=("$q|$description|FAIL|$weight")
+  fi
 }
-
-award_marks() {
-local marks="$1"
-local node="$2"
-
-```
-SCORE=$(( SCORE + marks ))
-
-if [[ "$node" == "node1" ]]
-then
-    NODE1_SCORE=$(( NODE1_SCORE + marks ))
-else
-    NODE2_SCORE=$(( NODE2_SCORE + marks ))
-fi
-```
-
-}
-
-pass_line() {
-echo -e "${green}PASS${reset} $1"
-}
-
-fail_line() {
-echo -e "${red}FAIL${reset} $1"
-}
-
-add_summary() {
-SUMMARY+=("$1|$2|$3|$4")
-}
-
-############################################################
-
-# PRECHECKS
-
-############################################################
 
 need_root
 ensure_sshpass
 
-echo
-echo -e "${bold}${blue}========================================${reset}"
-echo -e "${bold}${blue} RHCSA RHEL10 PAPER CHECKER${reset}"
-echo -e "${bold}${blue}========================================${reset}"
-
-############################################################
-
-# NODE1 CONNECTIVITY
-
-############################################################
-
-echo
-echo -e "${bold}${blue}Connecting Node1${reset}"
-
-if run_remote "$NODE1" "hostname" >/dev/null 2>&1
-then
-pass_line "Node1 reachable"
-else
-echo "Unable to connect to Node1"
-exit 1
-fi
-
-############################################################
-
-# Q1 NETWORK CONFIGURATION (12)
-
-############################################################
-
-echo
-echo "Q1 Network Configuration [12]"
-
-qscore=0
-
-HOSTNAME_CHECK=$(run_remote "$NODE1" "hostnamectl --static" 2>/dev/null)
-
-if [[ "$HOSTNAME_CHECK" == "primary.net1.example.com" ]]
-then
-qscore=$((qscore+3))
-pass_line "Hostname"
-else
-fail_line "Hostname"
-fi
-
-if run_remote "$NODE1" 
-"ip -4 addr | grep -q '172.25.1.11/'"
-then
-qscore=$((qscore+3))
-pass_line "IP Address"
-else
-fail_line "IP Address"
-fi
-
-if run_remote "$NODE1" 
-"ip route | grep -q 'default via 172.25.1.254'"
-then
-qscore=$((qscore+3))
-pass_line "Gateway"
-else
-fail_line "Gateway"
-fi
-
-if run_remote "$NODE1" 
-"grep -q '172.25.254.254' /etc/resolv.conf"
-then
-qscore=$((qscore+3))
-pass_line "DNS"
-else
-fail_line "DNS"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q1" "Network" "$qscore" "12"
-
-############################################################
-
-# Q2 REPOSITORY CONFIGURATION (8)
-
-############################################################
-
-echo
-echo "Q2 Repository Configuration [8]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"grep -R 'mirror.stream.centos.org/9-stream/AppStream' 
-/etc/yum.repos.d/* >/dev/null 2>&1"
-then
-qscore=$((qscore+4))
-pass_line "AppStream Repo"
-else
-fail_line "AppStream Repo"
-fi
-
-if run_remote "$NODE1" 
-"grep -R 'mirror.stream.centos.org/9-stream/BaseOS' 
-/etc/yum.repos.d/* >/dev/null 2>&1"
-then
-qscore=$((qscore+4))
-pass_line "BaseOS Repo"
-else
-fail_line "BaseOS Repo"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q2" "Repository" "$qscore" "8"
-
-############################################################
-
-# Q3 HTTPD + SELINUX (18)
-
-############################################################
-
-echo
-echo "Q3 HTTPD + SELinux [18]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"systemctl is-active httpd >/dev/null"
-then
-qscore=$((qscore+4))
-pass_line "HTTPD Active"
-else
-fail_line "HTTPD Active"
-fi
-
-if run_remote "$NODE1" 
-"systemctl is-enabled httpd >/dev/null"
-then
-qscore=$((qscore+4))
-pass_line "HTTPD Enabled"
-else
-fail_line "HTTPD Enabled"
-fi
-
-if run_remote "$NODE1" 
-"ss -tln | grep -q ':82 '"
-then
-qscore=$((qscore+4))
-pass_line "Port 82 Listening"
-else
-fail_line "Port 82 Listening"
-fi
-
-if run_remote "$NODE1" 
-"semanage port -l 2>/dev/null | grep http_port_t | grep -q 82"
-then
-qscore=$((qscore+3))
-pass_line "SELinux Port"
-else
-fail_line "SELinux Port"
-fi
-
-if run_remote "$NODE1" 
-"curl -s http://localhost:82 | grep -qi 'Ex200'"
-then
-qscore=$((qscore+3))
-pass_line "Content Accessible"
-else
-fail_line "Content Accessible"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q3" "HTTPD" "$qscore" "18"
-
-############################################################
-
-# Q4 USERS & GROUPS (12)
-
-############################################################
-
-echo
-echo "Q4 Users and Groups [12]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"getent group sysadmin >/dev/null"
-then
-qscore=$((qscore+3))
-pass_line "Group sysadmin"
-else
-fail_line "Group sysadmin"
-fi
-
-if run_remote "$NODE1" 
-"id natasha | grep -q sysadmin"
-then
-qscore=$((qscore+3))
-pass_line "Natasha"
-else
-fail_line "Natasha"
-fi
-
-if run_remote "$NODE1" 
-"id harry | grep -q sysadmin"
-then
-qscore=$((qscore+3))
-pass_line "Harry"
-else
-fail_line "Harry"
-fi
-
-if run_remote "$NODE1" 
-"getent passwd sarah | grep -Eq '(nologin|false)$'"
-then
-qscore=$((qscore+3))
-pass_line "Sarah Shell"
-else
-fail_line "Sarah Shell"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q4" "Users" "$qscore" "12"
-
-############################################################
-
-# Q5 CRON (8)
-
-############################################################
-
-echo
-echo "Q5 Cron [8]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"crontab -u natasha -l 2>/dev/null | grep -q '23 14'"
-then
-qscore=8
-pass_line "Cron Exists"
-else
-fail_line "Cron Missing"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q5" "Cron" "$qscore" "8"
-
-############################################################
-
-# Q6 COLLABORATIVE DIRECTORY (8)
-
-############################################################
-
-echo
-echo "Q6 Collaborative Directory [8]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"stat -c %G /common/admin 2>/dev/null | grep -qx sysadmin"
-then
-qscore=$((qscore+4))
-pass_line "Group Ownership"
-else
-fail_line "Group Ownership"
-fi
-
-if run_remote "$NODE1" 
-"stat -c %a /common/admin 2>/dev/null | grep -qx 2770"
-then
-qscore=$((qscore+4))
-pass_line "Permissions"
-else
-fail_line "Permissions"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q6" "Directory" "$qscore" "8"
-
-############################################################
-
-# Q7 NTP (8)
-
-############################################################
-
-echo
-echo "Q7 NTP [8]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"grep -q '3.in.pool.ntp.org' /etc/chrony.conf"
-then
-qscore=$((qscore+4))
-pass_line "Chrony Config"
-else
-fail_line "Chrony Config"
-fi
-
-if run_remote "$NODE1" 
-"systemctl is-active chronyd >/dev/null"
-then
-qscore=$((qscore+4))
-pass_line "Chronyd Active"
-else
-fail_line "Chronyd Active"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q7" "NTP" "$qscore" "8"
-
-############################################################
-
-# Q8 SIMONE FILES (8)
-
-############################################################
-
-echo
-echo "Q8 Simone Files [8]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"test -d /root/found"
-then
-qscore=$((qscore+4))
-pass_line "Directory Exists"
-else
-fail_line "Directory Exists"
-fi
-
-if run_remote "$NODE1" 
-"find /root/found -type f | grep -q ."
-then
-qscore=$((qscore+4))
-pass_line "Files Copied"
-else
-fail_line "Files Copied"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q8" "Simone Files" "$qscore" "8"
-
-############################################################
-
-# END PART 1
-
-############################################################
-
-echo
-echo "PART 1 COMPLETE"
-echo "Node1 Score So Far : $NODE1_SCORE"
-echo "Overall Score      : $SCORE"
-
-# Continue with PART 2
-
-############################################################
-
-# PART 2
-
-# NODE1 Q9 - Q16
-
-############################################################
-
-############################################################
-
-# Q9 SEARCH STRING (4)
-
-############################################################
-
-echo
-echo "Q9 Search String [4]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"grep -qi strato /searchfile 2>/dev/null"
-then
-qscore=4
-pass_line "Search Output Correct"
-else
-fail_line "Search Output Missing"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q9" "Search String" "$qscore" "4"
-
-############################################################
-
-# Q10 AUTOFS (35)
-
-############################################################
-
-echo
-echo "Q10 Autofs [35]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"systemctl is-enabled autofs >/dev/null 2>&1"
-then
-qscore=$((qscore+5))
-pass_line "Autofs Enabled"
-else
-fail_line "Autofs Enabled"
-fi
-
-if run_remote "$NODE1" 
-"systemctl is-active autofs >/dev/null 2>&1"
-then
-qscore=$((qscore+5))
-pass_line "Autofs Active"
-else
-fail_line "Autofs Active"
-fi
-
-if run_remote "$NODE1" 
-"grep -q '/rhome' /etc/auto.master"
-then
-qscore=$((qscore+10))
-pass_line "auto.master Configured"
-else
-fail_line "auto.master Configured"
-fi
-
-if run_remote "$NODE1" 
-"grep -qi remoteuser2 /etc/auto.misc"
-then
-qscore=$((qscore+10))
-pass_line "auto.misc Configured"
-else
-fail_line "auto.misc Configured"
-fi
-
-if run_remote "$NODE1" 
-"ls /rhome/remoteuser2 >/dev/null 2>&1"
-then
-qscore=$((qscore+5))
-pass_line "Mount Working"
-else
-fail_line "Mount Working"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q10" "Autofs" "$qscore" "35"
-
-############################################################
-
-# Q11 NEWSEARCH SCRIPT (18)
-
-############################################################
-
-echo
-echo "Q11 newsearch Script [18]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"test -f /usr/local/bin/newsearch"
-then
-qscore=$((qscore+4))
-pass_line "Script Exists"
-else
-fail_line "Script Exists"
-fi
-
-if run_remote "$NODE1" 
-"test -x /usr/local/bin/newsearch"
-then
-qscore=$((qscore+4))
-pass_line "Executable"
-else
-fail_line "Executable"
-fi
-
-if run_remote "$NODE1" 
-"grep -q 'find /usr' /usr/local/bin/newsearch"
-then
-qscore=$((qscore+5))
-pass_line "Find Logic Present"
-else
-fail_line "Find Logic Present"
-fi
-
-if run_remote "$NODE1" 
-"test -f /root/myoutput"
-then
-qscore=$((qscore+5))
-pass_line "Output File Generated"
-else
-fail_line "Output File Generated"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q11" "newsearch" "$qscore" "18"
-
-############################################################
-
-# Q12 BARRY USER (4)
-
-############################################################
-
-echo
-echo "Q12 Barry User [4]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"id -u barry 2>/dev/null | grep -qx 2112"
-then
-qscore=4
-pass_line "Barry UID Correct"
-else
-fail_line "Barry UID Incorrect"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q12" "Barry User" "$qscore" "4"
-
-############################################################
-
-# Q13 UMASK + SUDO + PASS_MAX_DAYS + EX200 (20)
-
-############################################################
-
-echo
-echo "Q13 Composite Question [20]"
-
-qscore=0
-
-# UMASK
-
-if run_remote "$NODE1" 
-"su - alex -c 'umask' 2>/dev/null | grep -q 0222"
-then
-qscore=$((qscore+5))
-pass_line "UMASK"
-else
-fail_line "UMASK"
-fi
-
-# SUDO
-
-if run_remote "$NODE1" 
-"grep -R '%elite.*NOPASSWD' /etc/sudoers /etc/sudoers.d/* \
-
-> /dev/null 2>&1"
-> then
-> qscore=$((qscore+5))
-> pass_line "Elite Sudo"
-> else
-> fail_line "Elite Sudo"
-> fi
-
-# PASSWORD POLICY
-
-if run_remote "$NODE1" 
-"grep -E '^PASS_MAX_DAYS[[:space:]]+20' 
-/etc/login.defs >/dev/null"
-then
-qscore=$((qscore+5))
-pass_line "PASS_MAX_DAYS"
-else
-fail_line "PASS_MAX_DAYS"
-fi
-
-# EX200 SCRIPT
-
-if run_remote "$NODE1" 
-"su - harry -c './ex200' 2>/dev/null | 
-grep -qi 'Ex200 Pass Progress Results'"
-then
-qscore=$((qscore+5))
-pass_line "Application"
-else
-fail_line "Application"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q13" "Composite" "$qscore" "20"
-
-############################################################
-
-# Q14 BACKUP (5)
-
-############################################################
-
-echo
-echo "Q14 Backup [5]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"file /home/backup.tar.bz2 2>/dev/null | 
-grep -qi bzip2"
-then
-qscore=$((qscore+3))
-pass_line "Archive Exists"
-else
-fail_line "Archive Exists"
-fi
-
-if run_remote "$NODE1" 
-"tar -tjf /home/backup.tar.bz2 2>/dev/null | 
-grep -q '^etc/'"
-then
-qscore=$((qscore+2))
-pass_line "Contains /etc"
-else
-fail_line "Contains /etc"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q14" "Backup" "$qscore" "5"
-
-############################################################
-
-# Q15 LOGGER + TIMER (25)
-
-############################################################
-
-echo
-echo "Q15 Logger Timer [25]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"rpm -q logger >/dev/null 2>&1"
-then
-qscore=$((qscore+3))
-pass_line "Package Installed"
-else
-fail_line "Package Installed"
-fi
-
-if run_remote "$NODE1" 
-"test -x /usr/local/bin/logger"
-then
-qscore=$((qscore+5))
-pass_line "Logger Script"
-else
-fail_line "Logger Script"
-fi
-
-if run_remote "$NODE1" 
-"systemctl list-unit-files | grep -q '^logger.service'"
-then
-qscore=$((qscore+5))
-pass_line "Service Exists"
-else
-fail_line "Service Exists"
-fi
-
-if run_remote "$NODE1" 
-"systemctl list-unit-files | grep -q '^logger.timer'"
-then
-qscore=$((qscore+5))
-pass_line "Timer Exists"
-else
-fail_line "Timer Exists"
-fi
-
-if run_remote "$NODE1" 
-"test -f /root/lookup_directory/ex200"
-then
-qscore=$((qscore+7))
-pass_line "Output Generated"
-else
-fail_line "Output Generated"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q15" "Logger Timer" "$qscore" "25"
-
-############################################################
-
-# Q16 ACL (12)
-
-############################################################
-
-echo
-echo "Q16 ACL [12]"
-
-qscore=0
-
-if run_remote "$NODE1" 
-"test -f /var/tmp/fstab"
-then
-qscore=$((qscore+2))
-pass_line "File Exists"
-else
-fail_line "File Exists"
-fi
-
-if run_remote "$NODE1" 
-"getfacl /var/tmp/fstab | grep -q 'user:natasha:rw-'"
-then
-qscore=$((qscore+4))
-pass_line "Natasha ACL"
-else
-fail_line "Natasha ACL"
-fi
-
-if run_remote "$NODE1" 
-"getfacl /var/tmp/fstab | grep -q 'user:harry:---'"
-then
-qscore=$((qscore+3))
-pass_line "Harry ACL"
-else
-fail_line "Harry ACL"
-fi
-
-if run_remote "$NODE1" 
-"getfacl /var/tmp/fstab | grep -q 'other::r--'"
-then
-qscore=$((qscore+3))
-pass_line "Others Read"
-else
-fail_line "Others Read"
-fi
-
-award_marks "$qscore" node1
-add_summary "Q16" "ACL" "$qscore" "12"
-
-############################################################
-
-# NODE1 COMPLETE
-
-############################################################
-
-echo
-echo "======================================="
-echo "NODE1 COMPLETE"
-echo "NODE1 SCORE : $NODE1_SCORE"
-echo "OVERALL SCORE : $SCORE"
-echo "======================================="
-
-# Continue with PART 3
-
-############################################################
-
-# PART 3
-
-# NODE2 Q17 - Q21
-
-############################################################
-
-echo
-echo -e "${bold}${blue}Connecting Node2${reset}"
-
-if run_remote "$NODE2" "hostname" >/dev/null 2>&1
-then
-pass_line "Node2 reachable"
-else
-echo "Unable to connect to Node2"
-exit 1
-fi
-
-############################################################
-
-# Q17 TUNED PROFILE (8)
-
-############################################################
-
-echo
-echo "Q17 Tuned Profile [8]"
-
-qscore=0
-
-if run_remote "$NODE2" 
-"systemctl is-enabled tuned >/dev/null 2>&1"
-then
-qscore=$((qscore+3))
-pass_line "Tuned Enabled"
-else
-fail_line "Tuned Enabled"
-fi
-
-if run_remote "$NODE2" 
-"systemctl is-active tuned >/dev/null 2>&1"
-then
-qscore=$((qscore+3))
-pass_line "Tuned Active"
-else
-fail_line "Tuned Active"
-fi
-
-if run_remote "$NODE2" 
-"tuned-adm active | grep -q ':'"
-then
-qscore=$((qscore+2))
-pass_line "Profile Applied"
-else
-fail_line "Profile Applied"
-fi
-
-award_marks "$qscore" node2
-add_summary "Q17" "Tuned" "$qscore" "8"
-
-############################################################
-
-# Q18 FLATPAK (18)
-
-############################################################
-
-echo
-echo "Q18 Flatpak [18]"
-
-qscore=0
-
-if run_remote "$NODE2" 
-"su - bammbamm -c 'flatpak remotes --user' 
-2>/dev/null | grep -qx extra"
-then
-qscore=$((qscore+6))
-pass_line "Remote extra"
-else
-fail_line "Remote extra"
-fi
-
-if run_remote "$NODE2" 
-"su - bammbamm -c 'flatpak list --user' 
-2>/dev/null | grep -qi codium"
-then
-qscore=$((qscore+6))
-pass_line "Codium Installed"
-else
-fail_line "Codium Installed"
-fi
-
-if run_remote "$NODE2" 
-"! flatpak remotes --system 2>/dev/null | grep -q extra"
-then
-qscore=$((qscore+6))
-pass_line "User Only Repository"
-else
-fail_line "User Only Repository"
-fi
-
-award_marks "$qscore" node2
-add_summary "Q18" "Flatpak" "$qscore" "18"
-
-############################################################
-
-# Q19 SWAP (20)
-
-############################################################
-
-echo
-echo "Q19 Swap [20]"
-
-qscore=0
-
-if run_remote "$NODE2" 
-"swapon --show | grep -q '/dev/'"
-then
-qscore=$((qscore+5))
-pass_line "Swap Active"
-else
-fail_line "Swap Active"
-fi
-
-if run_remote "$NODE2" 
-"swapon --show=SIZE --bytes | 
-awk 'NR>1 {if($1>=250000000) exit 0; else exit 1}'"
-then
-qscore=$((qscore+5))
-pass_line "Size >= 250MB"
-else
-fail_line "Size >= 250MB"
-fi
-
-if run_remote "$NODE2" 
-"grep -q 'swap' /etc/fstab"
-then
-qscore=$((qscore+5))
-pass_line "Persistent"
-else
-fail_line "Persistent"
-fi
-
-if run_remote "$NODE2" 
-"cat /proc/swaps | grep -q '/dev/'"
-then
-qscore=$((qscore+5))
-pass_line "In Use"
-else
-fail_line "In Use"
-fi
-
-award_marks "$qscore" node2
-add_summary "Q19" "Swap" "$qscore" "20"
-
-############################################################
-
-# Q20 LVM CREATION (30)
-
-############################################################
-
-echo
-echo "Q20 LVM Creation [30]"
-
-qscore=0
-
-if run_remote "$NODE2" 
-"pvs 2>/dev/null | grep -q '/dev/vdb'"
-then
-qscore=$((qscore+5))
-pass_line "PV Created"
-else
-fail_line "PV Created"
-fi
-
-if run_remote "$NODE2" 
-"vgs myvol >/dev/null 2>&1"
-then
-qscore=$((qscore+5))
-pass_line "VG myvol"
-else
-fail_line "VG myvol"
-fi
-
-if run_remote "$NODE2" 
-"vgs myvol --units m --noheadings -o vg_extent_size 
-2>/dev/null | grep -q '8.00m'"
-then
-qscore=$((qscore+5))
-pass_line "PE Size 8M"
-else
-fail_line "PE Size 8M"
-fi
-
-if run_remote "$NODE2" 
-"lvs myvol/mydatabase >/dev/null 2>&1"
-then
-qscore=$((qscore+5))
-pass_line "LV mydatabase"
-else
-fail_line "LV mydatabase"
-fi
-
-if run_remote "$NODE2" 
-"blkid /dev/myvol/mydatabase | grep -qi ext3"
-then
-qscore=$((qscore+5))
-pass_line "Filesystem ext3"
-else
-fail_line "Filesystem ext3"
-fi
-
-if run_remote "$NODE2" 
-"findmnt /mnt/database >/dev/null 2>&1"
-then
-qscore=$((qscore+5))
-pass_line "Mounted"
-else
-fail_line "Mounted"
-fi
-
-award_marks "$qscore" node2
-add_summary "Q20" "LVM Creation" "$qscore" "30"
-
-############################################################
-
-# Q21 LVM RESIZE (15)
-
-############################################################
-
-echo
-echo "Q21 LVM Resize [15]"
-
-qscore=0
-
-if run_remote "$NODE2" 
-"lvs --units m --noheadings -o lv_size 2>/dev/null | 
-grep -E '350.00m|349.|351.'"
-then
-qscore=$((qscore+10))
-pass_line "Home LV Resized"
-else
-fail_line "Home LV Resized"
-fi
-
-if run_remote "$NODE2" 
-"findmnt /home >/dev/null 2>&1"
-then
-qscore=$((qscore+5))
-pass_line "Filesystem Mounted"
-else
-fail_line "Filesystem Mounted"
-fi
-
-award_marks "$qscore" node2
-add_summary "Q21" "LVM Resize" "$qscore" "15"
-
-############################################################
-
-# NODE2 COMPLETE
-
-############################################################
-
-echo
-echo "======================================="
-echo "NODE2 COMPLETE"
-echo "NODE2 SCORE : $NODE2_SCORE"
-echo "OVERALL SCORE : $SCORE"
-echo "======================================="
-
-# Continue with PART 4
-############################################################
-
-# PART 4
-
-# FINAL REPORTING
-
-############################################################
-
-echo
-echo
-echo -e "${bold}${blue}=========================================${reset}"
-echo -e "${bold}${blue}          RHCSA RHEL10 REPORT            ${reset}"
-echo -e "${bold}${blue}=========================================${reset}"
-
-printf "\n"
-
-printf "%-6s %-30s %-10s\n" "QNO" "TASK" "SCORE"
-printf "%-6s %-30s %-10s\n" "----" "------------------------------" "----------"
-
-for row in "${SUMMARY[@]}"
-do
-IFS='|' read -r q task score total <<< "$row"
-
-```
-if [[ "$score" == "$total" ]]
-then
-    printf "${green}%-6s %-30s %-10s${reset}\n" \
-        "$q" "$task" "$score/$total"
-elif [[ "$score" -eq 0 ]]
-then
-    printf "${red}%-6s %-30s %-10s${reset}\n" \
-        "$q" "$task" "$score/$total"
-else
-    printf "${yellow}%-6s %-30s %-10s${reset}\n" \
-        "$q" "$task" "$score/$total"
-fi
-```
-
+printf '%s%sRHEL 10 RHCSA CHECKER%s\n' "$BLUE" "$BOLD" "$RESET"
+printf 'Node1: %s (Q02-Q14; Q15 is not present in the supplied HTML set)\n' "$NODE1"
+printf 'Node2: %s (Q16-Q22)\n' "$NODE2"
+printf 'Scoring: %s total marks; pass at %s marks\n\n' "$TOTAL_MARKS" "$PASS_MARKS"
+
+# The supplied HTML files contain 20 tasks. Their visible task labels skip Task 15
+# and contain stale labels for Flatpak/swap/LVM. IDs below follow the intended task
+# sequence from the file contents: root password is Q16, resize is Q22.
+
+printf '%s%sChecking node1 tasks%s\n' "$BLUE" "$BOLD" "$RESET"
+
+run_remote_check Q02 13 'Network hostname/IP/gateway/DNS' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+hostnamectl --static | grep -qx "primary.net1.example.com" || exit 1
+ip -o -4 addr show | grep -Eq "inet 172\.25\.250\.11/24([[:space:]]|$)" || exit 1
+ip -4 route show default | grep -q "via 172.25.250.254" || exit 1
+nmcli -t -f IP4.DNS device show 2>/dev/null | grep -q "172.25.250.220" || grep -Rqs "172.25.250.220" /etc/NetworkManager/system-connections
+'
+
+run_remote_check Q03 13 'BaseOS and AppStream default repositories' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+r=/etc/yum.repos.d
+ grep -Rqs "content.example.com/rhel10.0/x86_64/dvd/BaseOS" "$r" || exit 1
+ grep -Rqs "content.example.com/rhel10.0/x86_64/dvd/AppStream" "$r" || exit 1
+'
+
+run_remote_check Q04 13 'httpd on port 82, SELinux, boot enablement and local page' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+systemctl is-active --quiet httpd || exit 1
+systemctl is-enabled --quiet httpd || exit 1
+ss -ltn | awk "NR>1 {print \$4}" | grep -Eq "(^|:)82$" || exit 1
+curl --max-time 5 -fsS http://localhost:82/file1 >/dev/null || exit 1
+if command -v getenforce >/dev/null 2>&1 && [[ $(getenforce) == Enforcing ]]; then
+  command -v semanage >/dev/null 2>&1 || exit 1
+  semanage port -l | awk "\$1 == \"http_port_t\" {for (i=2;i<=NF;i++) if (\$i == 82 || \$i ~ /,82,/) found=1} END {exit !found}"
+fi
+'
+
+run_remote_check Q05 13 'sysadmin group and natasha/harry/sarah account requirements' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+getent group sysadmin >/dev/null || exit 1
+id natasha >/dev/null 2>&1 && id harry >/dev/null 2>&1 && id sarah >/dev/null 2>&1 || exit 1
+id -nG natasha | tr " " "\n" | grep -qx sysadmin || exit 1
+id -nG harry | tr " " "\n" | grep -qx sysadmin || exit 1
+! id -nG sarah | tr " " "\n" | grep -qx sysadmin || exit 1
+shell=$(getent passwd sarah | cut -d: -f7)
+case "$shell" in */nologin|*/false) ;; *) exit 1 ;; esac
+# Password values cannot be safely inferred from /etc/shadow; account structure is checked here.
+'
+
+run_remote_check Q06 13 'Natasha daily 14:23 cron and Harry every-3-minute logger cron' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+n=$(crontab -u natasha -l 2>/dev/null || true)
+h=$(crontab -u harry -l 2>/dev/null || true)
+printf "%s\n" "$n" | grep -Eq "^[[:space:]]*23[[:space:]]+14[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]].*/bin/echo[[:space:]]+hello([[:space:]]|$)" || exit 1
+printf "%s\n" "$h" | grep -Eq "^[[:space:]]*\*/3[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*[[:space:]].*/usr/bin/logger([[:space:]]|.*)EX200 in progress" || exit 1
+'
+
+run_remote_check Q07 13 'Compressed /etc backup at /home/backup.tar.bz2' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+f=/home/backup.tar.bz2
+[[ -s "$f" ]] || exit 1
+tar -tjf "$f" 2>/dev/null | grep -Eq "(^|/)etc(/|$)" || exit 1
+'
+
+run_remote_check Q08 12 'chrony NTP client configured for classroom.example.com' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+systemctl is-enabled --quiet chronyd || exit 1
+systemctl is-active --quiet chronyd || exit 1
+grep -RqsE "^[[:space:]]*(server|pool)[[:space:]]+classroom\.example\.com([[:space:]]|$)" /etc/chrony.conf /etc/chrony.d 2>/dev/null || exit 1
+'
+
+run_remote_check Q09 12 'Files owned by Simone copied into /root/found' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+getent passwd Simone >/dev/null || getent passwd simone >/dev/null || exit 1
+[[ -d /root/found ]] || exit 1
+u=Simone; getent passwd "$u" >/dev/null || u=simone
+src=$(find / -xdev -type f -user "$u" -not -path "/root/found/*" -not -path "/proc/*" -not -path "/sys/*" -not -path "/run/*" 2>/dev/null | wc -l)
+dst=$(find /root/found -type f 2>/dev/null | wc -l)
+(( src == 0 || dst >= src )) || exit 1
+'
+
+run_remote_check Q10 12 'grep strato result saved to /searchfile' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+[[ -s /searchfile ]] || exit 1
+grep -q "strato" /searchfile || exit 1
+if [[ -r /usr/share/dict/words ]]; then grep -Fxf /searchfile /usr/share/dict/words >/dev/null 2>&1 || grep -Fq "strato" /searchfile || exit 1; fi
+'
+
+run_remote_check Q11 40 'Autofs writable NFS home for remoteuser2' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+systemctl is-enabled --quiet autofs || exit 1
+systemctl is-active --quiet autofs || exit 1
+getent passwd remoteuser2 >/dev/null || exit 1
+# Trigger the automount, then verify the mounted NFS source and export path.
+timeout 10 ls -la /home/remoteuser2 >/dev/null 2>&1 || exit 1
+src=$(findmnt -n -T /home/remoteuser2 -o SOURCE 2>/dev/null || true)
+type=$(findmnt -n -T /home/remoteuser2 -o FSTYPE 2>/dev/null || true)
+[[ "$type" == nfs || "$type" == nfs4 ]] || exit 1
+[[ "$src" == *workstation.lab.example.com* || "$src" == *172.25.250.9* ]] || exit 1
+[[ "$src" == */ourhome/remoteuser2* ]] || exit 1
+runuser -u remoteuser2 -- test -w /home/remoteuser2 || exit 1
+'
+
+run_remote_check Q12 12 'barry user created with UID 2112' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+[[ $(id -u barry 2>/dev/null) == 2112 ]] || exit 1
+'
+
+run_remote_check Q13 12 'newsearch, alex default permissions, elite sudo, password policy, ex200' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+# newsearch must be executable, target /usr, filter the requested size range and SUID, and write output.
+[[ -x /usr/local/bin/newsearch ]] || exit 1
+grep -qE "(/usr|find)" /usr/local/bin/newsearch || exit 1
+grep -qE -- "-perm[[:space:]]+(/4000|-4000)" /usr/local/bin/newsearch || exit 1
+grep -qE "30k|30720" /usr/local/bin/newsearch || exit 1
+grep -qE "50k|51200" /usr/local/bin/newsearch || exit 1
+[[ -f /root/myoutput ]] || exit 1
+# alex profile should set umask 0222 (files 444, directories 555).
+getent passwd alex >/dev/null || exit 1
+home=$(getent passwd alex | cut -d: -f6)
+grep -RqsE "umask[[:space:]]+0?222" "$home/.bash_profile" "$home/.bashrc" /etc/profile.d 2>/dev/null || exit 1
+getent group elite >/dev/null || exit 1
+grep -RqsE "^[[:space:]]*%?elite[[:space:]]+.*NOPASSWD:[[:space:]]*ALL" /etc/sudoers /etc/sudoers.d 2>/dev/null || exit 1
+grep -Eq "^[[:space:]]*PASS_MAX_DAYS[[:space:]]+20([[:space:]]|$)" /etc/login.defs || exit 1
+command -v ex200 >/dev/null 2>&1 || exit 1
+runuser -u aslan -- ex200 >/dev/null 2>&1 || exit 1
+'
+
+run_remote_check Q14 12 'logger systemd timer and /var/tmp/fstab ACL requirements' "$NODE1" "$NODE1_ROOT_PASS" '
+set -u
+rpm -q logger >/dev/null 2>&1 || exit 1
+[[ -x /usr/local/bin/logger ]] || exit 1
+[[ -e /root/lookup_directory/ex200 ]] || exit 1
+svc=$(grep -RlE "ExecStart=.*(/usr/local/bin/logger|logger)" /etc/systemd/system /usr/lib/systemd/system 2>/dev/null | head -n1)
+[[ -n "$svc" ]] || exit 1
+timer=$(find /etc/systemd/system /usr/lib/systemd/system -maxdepth 2 -type f -name "*.timer" -print0 2>/dev/null | xargs -0 grep -lE "OnCalendar=.*\*:\*:00|OnUnitActiveSec=60|OnCalendar=.*minutely" 2>/dev/null | head -n1)
+[[ -n "$timer" ]] || exit 1
+systemctl is-active --quiet "$(basename "$timer")" || exit 1
+systemctl is-enabled --quiet "$(basename "$timer")" || exit 1
+[[ -f /var/tmp/fstab ]] || exit 1
+[[ $(stat -c %U:%G /var/tmp/fstab) == root:root ]] || exit 1
+mode=$(stat -c %a /var/tmp/fstab); (( (8#$mode & 0111) == 0 )) || exit 1
+command -v getfacl >/dev/null 2>&1 || exit 1
+acl=$(getfacl -cp /var/tmp/fstab 2>/dev/null) || exit 1
+printf "%s\n" "$acl" | grep -Eq "^user:natasha:rw-?$" || exit 1
+printf "%s\n" "$acl" | grep -Eq "^user:harry:---$" || exit 1
+printf "%s\n" "$acl" | grep -Eq "^other::r--$" || exit 1
+'
+
+printf '\n%s%sChecking node2 tasks%s\n' "$BLUE" "$BOLD" "$RESET"
+
+run_remote_check Q16 12 'Root password is atenorth (successful root SSH authentication)' "$NODE2" "$NODE2_ROOT_PASS" '
+set -u
+[[ $(id -u) == 0 ]]
+'
+
+run_remote_check Q17 12 'BaseOS and AppStream default repositories' "$NODE2" "$NODE2_ROOT_PASS" '
+set -u
+r=/etc/yum.repos.d
+grep -Rqs "content.example.com/rhel10.0/x86_64/dvd/BaseOS" "$r" || exit 1
+grep -Rqs "content.example.com/rhel10.0/x86_64/dvd/AppStream" "$r" || exit 1
+'
+
+run_remote_check Q18 12 'Recommended tuned profile active' "$NODE2" "$NODE2_ROOT_PASS" '
+set -u
+command -v tuned-adm >/dev/null 2>&1 || exit 1
+recommended=$(tuned-adm recommend 2>/dev/null) || exit 1
+active=$(tuned-adm active 2>/dev/null | sed -n "s/^Current active profile: //p")
+[[ -n "$active" && "$active" == "$recommended" ]]
+'
+
+run_remote_check Q19 12 'Flatpak extra remote and codium installed for bammbamm only' "$NODE2" "$NODE2_ROOT_PASS" '
+set -u
+getent passwd bammbamm >/dev/null || exit 1
+home=$(getent passwd bammbamm | cut -d: -f6)
+[[ -d "$home" ]] || exit 1
+# --user remotes and installations must be visible as bammbamm, not root.
+runuser -u bammbamm -- env HOME="$home" XDG_DATA_HOME="$home/.local/share" flatpak remotes --user --columns=name 2>/dev/null | grep -qx extra || exit 1
+runuser -u bammbamm -- env HOME="$home" XDG_DATA_HOME="$home/.local/share" flatpak list --user --app --columns=application 2>/dev/null | grep -Eqi "(^|\.)codium$|codium" || exit 1
+if flatpak remotes --system --columns=name 2>/dev/null | grep -qx extra; then exit 1; fi
+if flatpak list --system --app --columns=application 2>/dev/null | grep -Eqi "(^|\.)codium$|codium"; then exit 1; fi
+'
+
+run_remote_check Q20 20 '250 MiB swap partition enabled now and persistent at reboot' "$NODE2" "$NODE2_ROOT_PASS" '
+set -u
+swapon --noheadings --raw --show=NAME,SIZE,TYPE 2>/dev/null | awk "$3 == \"partition\" {n=$2; gsub(/[^0-9]/,\"\",n); if (n >= 240 && n <= 260) found=1} END {exit !found}" || exit 1
+# Find a matching swap partition persisted in fstab (UUID or device path).
+awk "!/^#/ && \$3 == \"swap\" {found=1} END {exit !found}" /etc/fstab || exit 1
+'
+
+run_remote_check Q21 30 'myvol VG (8 MiB PE), 50-PE mydatabase LV, vfat mounted persistently at /database' "$NODE2" "$NODE2_ROOT_PASS" '
+set -u
+vgs myvol >/dev/null 2>&1 || exit 1
+pe=$(vgs --noheadings --units m --nosuffix -o vg_extent_size myvol 2>/dev/null | awk "{print int(\$1+0.5)}")
+[[ "$pe" == 8 ]] || exit 1
+lvs myvol/mydatabase >/dev/null 2>&1 || exit 1
+[[ $(lvs --noheadings -o lv_extent_count myvol/mydatabase 2>/dev/null | tr -d " ") == 50 ]] || exit 1
+[[ $(blkid -o value -s TYPE /dev/myvol/mydatabase 2>/dev/null) == vfat ]] || exit 1
+findmnt -n -T /database >/dev/null 2>&1 || exit 1
+[[ $(findmnt -n -T /database -o FSTYPE) == vfat ]] || exit 1
+awk "!/^#/ && \$2 == \"/database\" {found=1} END {exit !found}" /etc/fstab || exit 1
+'
+
+run_remote_check Q22 12 '/home LV resized to 125-165 MB and filesystem remains accessible' "$NODE2" "$NODE2_ROOT_PASS" '
+set -u
+findmnt -n -T /home >/dev/null 2>&1 || exit 1
+lv=$(findmnt -n -T /home -o SOURCE 2>/dev/null)
+[[ "$lv" == *"/dev/mapper/myvg-home"* || "$lv" == "/dev/myvg/home" ]] || exit 1
+size=$(lvs --noheadings --units m --nosuffix -o lv_size /dev/myvg/home 2>/dev/null | awk "{print int(\$1+0.5)}")
+[[ -n "$size" ]] && (( size >= 125 && size <= 165 )) || exit 1
+'
+
+printf '\n%s%sScore summary%s\n' "$BLUE" "$BOLD" "$RESET"
+printf '%-5s | %-6s | %-4s | %s\n' 'Task' 'Result' 'Mark' 'Description'
+printf '%s\n' '--------------------------------------------------------------------------'
+for item in "${SUMMARY[@]}"; do
+  IFS='|' read -r q description result weight <<< "$item"
+  if [[ "$result" == PASS ]]; then color="$GREEN"; else color="$RED"; fi
+  printf '%-5s | %s%-6s%s | %3s  | %s\n' "$q" "$color" "$result" "$RESET" "$([[ $result == PASS ]] && echo "$weight" || echo 0)/$weight" "$description"
 done
-
-echo
-echo "================================================="
-echo "NODE1 SCORE : $NODE1_SCORE"
-echo "NODE2 SCORE : $NODE2_SCORE"
-echo "================================================="
-
-PERCENTAGE=$(( SCORE * 100 / TOTAL_MARKS ))
-
-echo
-echo "================================================="
-echo "TOTAL MARKS : $TOTAL_MARKS"
-echo "PASS MARKS  : $PASS_MARKS"
-echo "OBTAINED    : $SCORE"
-echo "PERCENTAGE  : ${PERCENTAGE}%"
-echo "================================================="
-
-############################################################
-
-# GRADE
-
-############################################################
-
-if (( SCORE >= PASS_MARKS ))
-then
-RESULT="PASS"
-RESULT_COLOR="$green"
+percentage=$((TOTAL_EARNED * 100 / TOTAL_MARKS))
+printf '%s\n' '--------------------------------------------------------------------------'
+printf 'MARKS: %d / %d\nPERCENTAGE: %d%%\nPASS MARKS: %d\n' "$TOTAL_EARNED" "$TOTAL_MARKS" "$percentage" "$PASS_MARKS"
+if (( TOTAL_EARNED >= PASS_MARKS )); then
+  printf '%s%sRESULT: PASS%s\n' "$GREEN" "$BOLD" "$RESET"
 else
-RESULT="FAIL"
-RESULT_COLOR="$red"
+  printf '%s%sRESULT: FAIL%s\n' "$RED" "$BOLD" "$RESET"
 fi
-
-echo
-echo -e "${bold}${RESULT_COLOR}=========================================${reset}"
-echo -e "${bold}${RESULT_COLOR} RESULT : $RESULT${reset}"
-echo -e "${bold}${RESULT_COLOR}=========================================${reset}"
-
-############################################################
-
-# PERFORMANCE ANALYSIS
-
-############################################################
-
-echo
-echo "Performance Analysis"
-echo "--------------------"
-
-if (( PERCENTAGE >= 90 ))
-then
-echo "Excellent Performance"
-elif (( PERCENTAGE >= 80 ))
-then
-echo "Very Good Performance"
-elif (( PERCENTAGE >= 70 ))
-then
-echo "Good Performance"
-elif (( PERCENTAGE >= 60 ))
-then
-echo "Needs Improvement"
-else
-echo "Requires Significant Improvement"
-fi
-
-############################################################
-
-# FAILED QUESTIONS
-
-############################################################
-
-echo
-echo "Failed / Partial Questions"
-echo "--------------------------"
-
-FOUND=0
-
-for row in "${SUMMARY[@]}"
-do
-IFS='|' read -r q task score total <<< "$row"
-
-```
-if (( score < total ))
-then
-    FOUND=1
-    echo "$q  $task  ($score/$total)"
-fi
-```
-
-done
-
-if (( FOUND == 0 ))
-then
-echo "None"
-fi
-
-############################################################
-
-# TOP SCORING SECTIONS
-
-############################################################
-
-echo
-echo "Major Weighted Questions"
-echo "------------------------"
-
-for row in "${SUMMARY[@]}"
-do
-IFS='|' read -r q task score total <<< "$row"
-
-```
-if (( total >= 20 ))
-then
-    echo "$q  $task  ($score/$total)"
-fi
-```
-
-done
-
-############################################################
-
-# LOG FILE
-
-############################################################
-
-REPORT_FILE="/root/rhel10_exam_report.txt"
-
-{
-echo "RHCSA RHEL10 REPORT"
-echo "Generated : $(date)"
-echo
-
-for row in "${SUMMARY[@]}"
-do
-IFS='|' read -r q task score total <<< "$row"
-echo "$q | $task | $score/$total"
-done
-
-echo
-echo "NODE1 SCORE : $NODE1_SCORE"
-echo "NODE2 SCORE : $NODE2_SCORE"
-echo "TOTAL SCORE : $SCORE/$TOTAL_MARKS"
-echo "PERCENTAGE  : $PERCENTAGE%"
-echo "RESULT      : $RESULT"
-
-} > "$REPORT_FILE"
-
-echo
-echo "Report saved to:"
-echo "$REPORT_FILE"
-
-############################################################
-
-# FINAL OUTPUT
-
-############################################################
-
-echo
-echo -e "${bold}${blue}=========================================${reset}"
-echo -e "${bold}${blue} Checker Completed Successfully${reset}"
-echo -e "${bold}${blue}=========================================${reset}"
-
-exit 0
-
-############################################################
-
-# END OF SCRIPT
-
-############################################################
-
+printf '\nNotes: Password values for ordinary user accounts are not tested by reading /etc/shadow. Q05/Q12 verify account/group/UID state only. Q15 is absent from the supplied HTML files; the root-password task is checked as Q16 on node2, as requested.\n'
